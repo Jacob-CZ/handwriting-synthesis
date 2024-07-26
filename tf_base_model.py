@@ -104,9 +104,9 @@ class TFBaseModel(object):
 
         self.init_logging(self.log_dir)
         logging.info('\nnew run with parameters:\n{}'.format(pp.pformat(self.__dict__)))
-
+        config = tf.ConfigProto(device_count = {'GPU': 1})
         self.graph = self.build_graph()
-        self.session = tf.Session(graph=self.graph)
+        self.session = tf.Session(graph=self.graph, config=config)
         logging.info('built graph')
 
     def update_train_params(self):

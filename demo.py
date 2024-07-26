@@ -8,6 +8,11 @@ import drawing
 import lyrics
 from rnn import rnn
 
+from flask import Flask, request, jsonify
+import os
+from tensorflow.python.client import device_lib
+
+app = Flask(__name__)
 
 class Hand(object):
 
@@ -18,7 +23,7 @@ class Hand(object):
             checkpoint_dir='checkpoints',
             prediction_dir='predictions',
             learning_rates=[.0001, .00005, .00002],
-            batch_sizes=[32, 64, 64],
+            batch_sizes=[1024, 2048, 2048],
             patiences=[1500, 1000, 500],
             beta1_decays=[.9, .9, .9],
             validation_batch_size=32,
@@ -39,9 +44,9 @@ class Hand(object):
         self.nn.restore()
 
     def write(self, filename, lines, biases=None, styles=None, stroke_colors=None, stroke_widths=None):
-        valid_char_set = set(drawing.alphabet)
+        valid_char_set = set(drawing.alphabet + list("áčďéěíňóřšťúůýžÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ"))
         for line_num, line in enumerate(lines):
-            if len(line) > 75:
+            if len(line) > 210:
                 raise ValueError(
                     (
                         "Each line must be at most 75 characters. "
@@ -59,7 +64,8 @@ class Hand(object):
                     )
 
         strokes = self._sample(lines, biases=biases, styles=styles)
-        self._draw(strokes, lines, filename, stroke_colors=stroke_colors, stroke_widths=stroke_widths)
+        return self._draw(strokes, lines, filename, stroke_colors=stroke_colors, stroke_widths=stroke_widths)
+        
 
     def _sample(self, lines, biases=None, styles=None):
         num_samples = len(lines)
@@ -68,7 +74,7 @@ class Hand(object):
 
         x_prime = np.zeros([num_samples, 1200, 3])
         x_prime_len = np.zeros([num_samples])
-        chars = np.zeros([num_samples, 120])
+        chars = np.zeros([num_samples, 300])
         chars_len = np.zeros([num_samples])
 
         if styles is not None:
@@ -112,12 +118,11 @@ class Hand(object):
         stroke_widths = stroke_widths or [2]*len(lines)
 
         line_height = 60
-        view_width = 1000
+        view_width = 2000
         view_height = line_height*(len(strokes) + 1)
 
-        dwg = svgwrite.Drawing(filename=filename)
+        dwg = svgwrite.Drawing()
         dwg.viewbox(width=view_width, height=view_height)
-        dwg.add(dwg.rect(insert=(0, 0), size=(view_width, view_height), fill='white'))
 
         initial_coord = np.array([0, -(3*line_height / 4)])
         for offsets, line, color, width in zip(strokes, lines, stroke_colors, stroke_widths):
@@ -146,26 +151,30 @@ class Hand(object):
 
             initial_coord[1] -= line_height
 
-        dwg.save()
+        return dwg.tostring()
 
 
-if __name__ == '__main__':
-    hand = Hand()
 
-    # usage demo
-    lines = [
-        "Now this is a story all about how",
-        "My life got flipped turned upside down",
-        "And I'd like to take a minute, just sit right there",
-        "I'll tell you how I became the prince of a town called Bel-Air",
-    ]
-    biases = [.75 for i in lines]
-    styles = [9 for i in lines]
-    stroke_colors = ['red', 'green', 'black', 'blue']
-    stroke_widths = [1, 2, 1, 2]
+hand = Hand()
 
-    hand.write(
-        filename='img/usage_demo.svg',
+@app.route('/generate', methods=['POST'])
+def generate_svg():
+    data = request.json
+    print(data)
+    if not data or 'lines' not in data:
+        return jsonify({'error': 'Missing required parameters'}), 400
+
+    lines = data['lines']
+    biases = data.get('biases', [.75 for _ in lines])
+    styles = data.get('styles', [9 for _ in lines])
+    stroke_colors = data.get('stroke_colors', ['black' for _ in lines])
+    stroke_widths = data.get('stroke_widths', [1 for _ in lines])
+
+    # Initialize Hand object
+
+    # Generate SVG
+    out = hand.write(
+        filename=None,
         lines=lines,
         biases=biases,
         styles=styles,
@@ -173,38 +182,43 @@ if __name__ == '__main__':
         stroke_widths=stroke_widths
     )
 
-    # demo number 1 - fixed bias, fixed style
-    lines = lyrics.all_star.split("\n")
-    biases = [.75 for i in lines]
-    styles = [12 for i in lines]
+    # Return the path or URL to the generated SVG
+    return jsonify({'message': 'SVG generated successfully', 'path': out})
+@app.route('/g-code', methods=['POST'])
+def generate_gcode():
+    data = request.json
+    print(data)
+    if not data or 'lines' not in data:
+        return jsonify({'error': 'Missing required parameters'}), 400
 
-    hand.write(
-        filename='img/all_star.svg',
+    lines = data['lines']
+    biases = data.get('biases', [.75 for _ in lines])
+    styles = data.get('styles', [9 for _ in lines])
+    stroke_colors = data.get('stroke_colors', ['black' for _ in lines])
+    stroke_widths = data.get('stroke_widths', [1 for _ in lines])
+
+    # Initialize Hand object
+
+    # Generate SVG
+    out = hand.write(
+        filename=None,
         lines=lines,
         biases=biases,
         styles=styles,
+        stroke_colors=stroke_colors,
+        stroke_widths=stroke_widths
     )
 
-    # demo number 2 - fixed bias, varying style
-    lines = lyrics.downtown.split("\n")
-    biases = [.75 for i in lines]
-    styles = np.cumsum(np.array([len(i) for i in lines]) == 0).astype(int)
+    # Return the path or URL to the generated SVG
+    return jsonify({'message': 'SVG generated successfully', 'path': out})
 
-    hand.write(
-        filename='img/downtown.svg',
-        lines=lines,
-        biases=biases,
-        styles=styles,
-    )
+if __name__ == '__main__':
+    if not os.path.exists('generated_svg'):
+        os.makedirs('generated_svg')
 
-    # demo number 3 - varying bias, fixed style
-    lines = lyrics.give_up.split("\n")
-    biases = .2*np.flip(np.cumsum([len(i) == 0 for i in lines]), 0)
-    styles = [7 for i in lines]
-
-    hand.write(
-        filename='img/give_up.svg',
-        lines=lines,
-        biases=biases,
-        styles=styles,
-    )
+    def get_available_gpus():
+        local_device_protos = device_lib.list_local_devices()
+        print(local_device_protos)
+        return [x.name for x in local_device_protos if x.device_type == 'GPU']
+    print(get_available_gpus())
+    app.run(debug=True, host='0.0.0.0', port=5000)
